@@ -84,7 +84,7 @@ function App() {
     setFixError("");
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/review", {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, language }),
@@ -111,7 +111,7 @@ function App() {
     setCopied(false);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/fix", {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/fix`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
