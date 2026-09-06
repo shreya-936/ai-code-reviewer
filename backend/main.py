@@ -13,10 +13,7 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
-if api_key:
-    client = genai.Client(api_key=api_key)
-else:
-    client = None
+client = genai.Client(api_key=api_key) if api_key else None
 
 app = FastAPI(
     title="AI Code Reviewer",
@@ -24,12 +21,25 @@ app = FastAPI(
     version="1.0.0",
 )
 
+frontend_url = os.getenv("FRONTEND_URL", "")
+
+allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+if frontend_url:
+    allowed_origins.extend(
+        item.strip().rstrip("/")
+        for item in frontend_url.split(",")
+        if item.strip()
+    )
+
+allowed_origins = list(dict.fromkeys(allowed_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,12 +88,10 @@ def generate_json(prompt: str, response_model):
     if not api_key or client is None:
         raise HTTPException(
             status_code=500,
-            detail="GEMINI_API_KEY is not configured."
+            detail="GEMINI_API_KEY is not configured.",
         )
 
-    max_retries = 3
-
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
             response = client.models.generate_content(
                 model=model,
@@ -97,7 +105,7 @@ def generate_json(prompt: str, response_model):
             if not response.text:
                 raise HTTPException(
                     status_code=500,
-                    detail="Gemini returned no response."
+                    detail="Gemini returned no response.",
                 )
 
             return response.text
@@ -108,27 +116,20 @@ def generate_json(prompt: str, response_model):
         except Exception as error:
             error_text = str(error)
 
-            print(f"Gemini Error (attempt {attempt + 1}/{max_retries}):")
-            print(error_text)
-
-            temporary_error = (
-                "503" in error_text
-                or "UNAVAILABLE" in error_text
-                or "high demand" in error_text
-                or "temporarily" in error_text
-                or "429" in error_text
-                or "RESOURCE_EXHAUSTED" in error_text
+            temporary_error = any(
+                marker in error_text
+                for marker in (
+                    "503",
+                    "UNAVAILABLE",
+                    "high demand",
+                    "temporarily",
+                    "429",
+                    "RESOURCE_EXHAUSTED",
+                )
             )
 
-            if temporary_error and attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-
-                print(
-                    f"Temporary Gemini error. "
-                    f"Retrying in {wait_time} seconds..."
-                )
-
-                time.sleep(wait_time)
+            if temporary_error and attempt < 2:
+                time.sleep(2 ** attempt)
                 continue
 
             raise HTTPException(
@@ -138,13 +139,8 @@ def generate_json(prompt: str, response_model):
                     "Please try again in a few seconds."
                     if temporary_error
                     else "Gemini AI request failed. Check the backend terminal."
-                )
+                ),
             )
-
-    raise HTTPException(
-        status_code=503,
-        detail="Gemini is temporarily unavailable."
-    )
 
 
 @app.get("/")
@@ -159,132 +155,104 @@ def health():
 
 @app.post("/api/review", response_model=ReviewResponse)
 def review_code(request: ReviewRequest):
-
     if not request.code.strip():
         raise HTTPException(
             status_code=400,
-            detail="Code cannot be empty."
+            detail="Code cannot be empty.",
         )
 
     prompt = f"""
-You are an expert software engineer and code reviewer.
+You are CodePilot, an expert AI code reviewer.
 
-Analyze the submitted source code.
-
-Programming language:
-{request.language}
-
-Source code:
-{request.code}
+Analyze the following {request.language} code.
 
 Focus on:
-
-1. Bugs and correctness
+1. Bugs and correctness problems
 2. Security vulnerabilities
 3. Performance problems
-4. Reliability and maintainability
+4. Code quality and maintainability
 
-For every meaningful issue provide:
+For every meaningful issue:
+- Assign severity: critical, warning, or suggestion.
+- Assign category: bugs, security, performance, or quality.
+- Identify the most relevant line number.
+- Give a concise title.
+- Explain clearly why it is a problem.
+- Provide a practical recommended fix.
+- Provide multiple alternative approaches.
+- Mark exactly one approach as recommended.
+- Explain trade-offs between approaches.
 
-- id
-- severity: critical, warning, or suggestion
-- category: bug, security, performance, reliability, or maintainability
-- line number
-- title
-- explanation
-- suggested fix
-- 2 to 3 alternative approaches
-- exactly one recommended approach
+Do not invent problems.
+Only report issues reasonably supported by the code.
 
-For each alternative approach:
-- name
-- description
-- recommended
+Give the code a quality score from 0 to 100.
 
-Do not invent issues.
+Return only structured JSON matching the requested schema.
 
-Only report problems supported by the code.
+Language: {request.language}
 
-If there are no issues, return an empty issues array.
-
-The score must be between 0 and 100.
-
-You are reviewing code, not executing it.
-
-Return ONLY valid JSON matching the requested schema.
+Code:
+```text
+{request.code}
+```
 """
 
     result_json = generate_json(prompt, ReviewResponse)
 
     try:
         return ReviewResponse.model_validate_json(result_json)
-
-    except Exception as error:
-        print("Review JSON Error:", error)
-
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail="Gemini returned an invalid review."
+            detail="Gemini returned an invalid review.",
         )
 
 
 @app.post("/api/fix", response_model=FixResponse)
 def fix_code(request: FixRequest):
-
     if not request.code.strip():
         raise HTTPException(
             status_code=400,
-            detail="Code cannot be empty."
+            detail="Code cannot be empty.",
         )
 
     if not request.issue.strip():
         raise HTTPException(
             status_code=400,
-            detail="Issue description cannot be empty."
+            detail="Issue description cannot be empty.",
         )
 
     prompt = f"""
-You are an expert software engineer.
+You are CodePilot, an expert AI software engineer.
 
-Fix the specific issue identified in the submitted code.
-
-Programming language:
-{request.language}
-
-Original code:
-{request.code}
-
-Issue:
-{request.issue}
+Fix the specified issue in the provided {request.language} code.
 
 Requirements:
+1. Preserve the original functionality wherever possible.
+2. Fix the reported issue correctly.
+3. Do not introduce unrelated changes.
+4. Keep the code readable and maintainable.
+5. Return the complete corrected code.
+6. Briefly explain what was changed and why.
 
-- Preserve the intended behavior.
-- Fix the identified issue.
-- Do not remove unrelated functionality.
-- Do not invent requirements.
-- Keep the code readable.
-- Return the complete corrected source code.
-- Also provide a short explanation of the fix.
-- Do not execute the code.
+Issue to fix:
+{request.issue}
 
-Return ONLY valid JSON matching this structure:
+Original code:
+```text
+{request.code}
+```
 
-{{
-    "explanation": "short explanation of the fix",
-    "fixed_code": "complete corrected source code"
-}}
+Return only structured JSON matching the requested schema.
 """
 
     result_json = generate_json(prompt, FixResponse)
 
     try:
         return FixResponse.model_validate_json(result_json)
-
-    except Exception as error:
-        print("Fix JSON Error:", error)
-
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail="Gemini returned an invalid fix."
+            detail="Gemini returned an invalid fix.",
         )

@@ -28,23 +28,23 @@ function buildDiffLines(before, after) {
     const beforeLine = beforeLines[i];
     const afterLine = afterLines[i];
 
-    if (beforeLine === afterLine) {
-      rows.push({
-        type: "same",
-        before: beforeLine ?? "",
-        after: afterLine ?? "",
-        beforeNumber: beforeLine !== undefined ? i + 1 : "",
-        afterNumber: afterLine !== undefined ? i + 1 : "",
-      });
-    } else {
-      rows.push({
-        type: beforeLine === undefined ? "added" : "changed",
-        before: beforeLine ?? "",
-        after: afterLine ?? "",
-        beforeNumber: beforeLine !== undefined ? i + 1 : "",
-        afterNumber: afterLine !== undefined ? i + 1 : "",
-      });
+    // Determine the type of change
+    let type = "same";
+    if (beforeLine === undefined) {
+      type = "added";
+    } else if (afterLine === undefined) {
+      type = "removed";
+    } else if (beforeLine !== afterLine) {
+      type = "changed";
     }
+
+    rows.push({
+      type,
+      before: beforeLine ?? "",
+      after: afterLine ?? "",
+      beforeNumber: beforeLine !== undefined ? i + 1 : "",
+      afterNumber: afterLine !== undefined ? i + 1 : "",
+    });
   }
 
   return rows;
@@ -84,21 +84,31 @@ function App() {
     setFixError("");
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/review`, {
+      const response = await fetch(`http://127.0.0.1:8000/api/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, language }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Review failed with status ${response.status}.`);
+      }
+
       const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.detail || "Review failed.");
+      // Validate response structure
+      if (!data.issues || !Array.isArray(data.issues)) {
+        throw new Error("Invalid response format from server.");
       }
 
       setReviewResult(data);
     } catch (error) {
-      setReviewError(error.message || "Unable to review code.");
+      setReviewError(
+        error instanceof Error
+          ? error.message
+          : "Unable to review code. Check your backend connection."
+      );
     } finally {
       setIsReviewing(false);
     }
@@ -111,7 +121,7 @@ function App() {
     setCopied(false);
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/fix`, {
+      const response = await fetch(`http://127.0.0.1:8000/api/fix`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -125,10 +135,16 @@ Suggested fix: ${issue.suggested_fix}`,
         }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `AI fix failed with status ${response.status}.`);
+      }
+
       const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.detail || "AI fix failed.");
+      // Validate response structure
+      if (!data.fixed_code || !data.explanation) {
+        throw new Error("Invalid fix response from server.");
       }
 
       setFixResult({
@@ -137,7 +153,11 @@ Suggested fix: ${issue.suggested_fix}`,
         fixed_code: data.fixed_code,
       });
     } catch (error) {
-      setFixError(error.message || "Unable to generate the AI fix.");
+      setFixError(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate AI fix. Check your backend."
+      );
     } finally {
       setFixingIssueId(null);
     }
@@ -151,7 +171,7 @@ Suggested fix: ${issue.suggested_fix}`,
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setFixError("Could not copy the fixed code.");
+      setFixError("Could not copy the fixed code to clipboard.");
     }
   };
 
@@ -161,7 +181,7 @@ Suggested fix: ${issue.suggested_fix}`,
       setCodeCopied(true);
       setTimeout(() => setCodeCopied(false), 1800);
     } catch {
-      setReviewError("Could not copy the code.");
+      setReviewError("Could not copy the code to clipboard.");
     }
   };
 
@@ -238,9 +258,15 @@ Suggested fix: ${issue.suggested_fix}`,
           </p>
 
           <div className="hero-points">
-            <span><Check size={14} /> Bugs</span>
-            <span><Check size={14} /> Security</span>
-            <span><Check size={14} /> Performance</span>
+            <span>
+              <Check size={14} /> Bugs
+            </span>
+            <span>
+              <Check size={14} /> Security
+            </span>
+            <span>
+              <Check size={14} /> Performance
+            </span>
           </div>
         </section>
 
@@ -335,9 +361,15 @@ Suggested fix: ${issue.suggested_fix}`,
 
           <div className="checks-row">
             <span className="checks-label">AI checks</span>
-            <span className="check-chip"><Bug size={13} /> Bugs</span>
-            <span className="check-chip"><Shield size={13} /> Security</span>
-            <span className="check-chip"><Gauge size={13} /> Performance</span>
+            <span className="check-chip">
+              <Bug size={13} /> Bugs
+            </span>
+            <span className="check-chip">
+              <Shield size={13} /> Security
+            </span>
+            <span className="check-chip">
+              <Gauge size={13} /> Performance
+            </span>
           </div>
 
           <button
@@ -374,7 +406,8 @@ Suggested fix: ${issue.suggested_fix}`,
                 <div className="section-kicker">ANALYSIS COMPLETE</div>
                 <h2>Review Results</h2>
                 <p className="results-subtitle">
-                  CodePilot found {issues.length} actionable finding{issues.length === 1 ? "" : "s"}.
+                  CodePilot found {issues.length} actionable finding
+                  {issues.length === 1 ? "" : "s"}.
                 </p>
               </div>
 
@@ -455,7 +488,10 @@ Suggested fix: ${issue.suggested_fix}`,
                   </div>
                   <div>
                     <strong>Looks good!</strong>
-                    <p>CodePilot did not find any significant problems in this code.</p>
+                    <p>
+                      CodePilot did not find any significant problems in this
+                      code.
+                    </p>
                   </div>
                 </div>
               ) : (
@@ -465,24 +501,36 @@ Suggested fix: ${issue.suggested_fix}`,
 
                   return (
                     <div
-                      className={`issue-card ${isExpanded ? "issue-card-expanded" : ""}`}
+                      className={`issue-card ${
+                        isExpanded ? "issue-card-expanded" : ""
+                      }`}
                       key={issue.id}
                     >
                       <div className="issue-main">
-                        <div className={`severity-icon ${getSeverityClass(issue.severity)}`}>
+                        <div
+                          className={`severity-icon ${getSeverityClass(
+                            issue.severity
+                          )}`}
+                        >
                           {getSeverityIcon(issue.severity)}
                         </div>
 
                         <div className="issue-content">
                           <div className="issue-topline">
-                            <span className={`severity-badge ${getSeverityClass(issue.severity)}`}>
+                            <span
+                              className={`severity-badge ${getSeverityClass(
+                                issue.severity
+                              )}`}
+                            >
                               {issue.severity}
                             </span>
                             <span className="category-badge">
                               {getCategoryIcon(issue.category)}
                               {issue.category}
                             </span>
-                            <span className="line-number">Line {issue.line}</span>
+                            <span className="line-number">
+                              Line {issue.line}
+                            </span>
                           </div>
 
                           <h4>{issue.title}</h4>
@@ -497,7 +545,9 @@ Suggested fix: ${issue.suggested_fix}`,
                             <button
                               className="alternative-button"
                               onClick={() =>
-                                setExpandedIssue(isExpanded ? null : issue.id)
+                                setExpandedIssue(
+                                  isExpanded ? null : issue.id
+                                )
                               }
                             >
                               <Sparkles size={14} />
@@ -530,27 +580,28 @@ Suggested fix: ${issue.suggested_fix}`,
 
                           {isExpanded && (
                             <div className="approaches">
-                              {issue.approaches.map((approach, index) => (
-                                <div
-                                  className="approach-card"
-                                  key={`${issue.id}-${index}`}
-                                >
-                                  <div className="approach-number">
-                                    0{index + 1}
-                                  </div>
-                                  <div className="approach-content">
-                                    <div className="approach-header">
-                                      <strong>{approach.name}</strong>
-                                      {approach.recommended && (
-                                        <span className="recommended-badge">
-                                          Recommended
-                                        </span>
-                                      )}
+                              {issue.approaches &&
+                                issue.approaches.map((approach, index) => (
+                                  <div
+                                    className="approach-card"
+                                    key={`${issue.id}-${index}`}
+                                  >
+                                    <div className="approach-number">
+                                      0{index + 1}
                                     </div>
-                                    <p>{approach.description}</p>
+                                    <div className="approach-content">
+                                      <div className="approach-header">
+                                        <strong>{approach.name}</strong>
+                                        {approach.recommended && (
+                                          <span className="recommended-badge">
+                                            Recommended
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p>{approach.description}</p>
+                                    </div>
                                   </div>
-                                </div>
-                              ))}
+                                ))}
                             </div>
                           )}
                         </div>
@@ -605,7 +656,9 @@ Suggested fix: ${issue.suggested_fix}`,
               <div className="diff-titlebar">
                 <div>
                   <strong>Code changes</strong>
-                  <span>Review the AI-generated modification before applying it.</span>
+                  <span>
+                    Review the AI-generated modification before applying it.
+                  </span>
                 </div>
                 <div className="diff-legend">
                   <span className="legend-item removed">− Removed</span>
@@ -629,24 +682,36 @@ Suggested fix: ${issue.suggested_fix}`,
                   <div className="diff-row" key={index}>
                     <div
                       className={`diff-side ${
-                        line.type === "changed" ? "diff-removed" : ""
+                        line.type === "removed" || line.type === "changed"
+                          ? "diff-removed"
+                          : ""
                       }`}
                     >
-                      <span className="diff-line-number">{line.beforeNumber}</span>
+                      <span className="diff-line-number">
+                        {line.beforeNumber}
+                      </span>
                       <span className="diff-symbol">
-                        {line.type === "changed" ? "−" : " "}
+                        {line.type === "removed" || line.type === "changed"
+                          ? "−"
+                          : " "}
                       </span>
                       <code>{line.before}</code>
                     </div>
 
                     <div
                       className={`diff-side ${
-                        line.type === "changed" ? "diff-added" : ""
+                        line.type === "added" || line.type === "changed"
+                          ? "diff-added"
+                          : ""
                       }`}
                     >
-                      <span className="diff-line-number">{line.afterNumber}</span>
+                      <span className="diff-line-number">
+                        {line.afterNumber}
+                      </span>
                       <span className="diff-symbol">
-                        {line.type === "changed" ? "+" : " "}
+                        {line.type === "added" || line.type === "changed"
+                          ? "+"
+                          : " "}
                       </span>
                       <code>{line.after}</code>
                     </div>
