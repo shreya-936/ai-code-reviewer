@@ -18,6 +18,13 @@ import {
 } from "lucide-react";
 import "./App.css";
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1"
+    ? "http://127.0.0.1:8000"
+    : "https://codepilot-backend-ltz3.onrender.com");
+
 function buildDiffLines(before, after) {
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
@@ -49,8 +56,6 @@ function buildDiffLines(before, after) {
 
   return rows;
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 function App() {
   const [language, setLanguage] = useState("Python");
